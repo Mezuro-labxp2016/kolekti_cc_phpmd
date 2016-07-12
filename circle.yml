@@ -1,11 +1,37 @@
 machine:
   services:
     - docker
-
 dependencies:
   pre:
+    # Add the Junit rspec formatter if it is missing
+    - grep -q rspec_junit_formatter Gemfile || echo $'\ngem \'rspec_junit_formatter\'' >> Gemfile
+    # Choose which Ruby version this container will test
+    - >
+      case $CIRCLE_NODE_INDEX in
+      0)                   cat .ruby-version ;;
+      1) echo 2.0.0-p648 | tee .ruby-version ;;
+      2) echo 2.1.8      | tee .ruby-version ;;
+      esac;
+      rvm use --default --install .;
+    - rvm . do gem install bundler -v 1.12.5
     # Workaround: replace docker command with one that ignores the --rm and --cap-drop options
     - sudo cp scripts/docker-circle-ci /usr/local/bin/docker
     - sudo chmod 755 /usr/local/bin/docker
     - docker pull codeclimate/codeclimate-phpmd:latest
-    - gem install bundler
+  post:
+    # Copy the gem cache for the different Ruby versions to the first container
+    - >
+      [ "$CIRCLE_NODE_INDEX" -eq 0 ] || exit 0;
+      for ((i = 0; i < CIRCLE_NODE_TOTAL; i++)); do
+        rsync -ruv node${i}:"$PWD"/vendor/bundle/ "$PWD"/vendor/bundle/
+      done;
+test:
+  override:
+    - 'ruby --version':
+        parallel: true
+    - 'mkdir -p $CIRCLE_TEST_REPORTS/{cucumber,rspec}':
+        parallel: true
+    - 'bundle exec rspec -r rspec_junit_formatter --format RspecJunitFormatter -o $CIRCLE_TEST_REPORTS/rspec/junit.xml':
+        parallel: true      
+    - 'bundle exec cucumber --tags ~@wip --format pretty --format junit --out $CIRCLE_TEST_REPORTS/cucumber':
+        parallel: true
